@@ -1,180 +1,103 @@
 import wx
+import numpy as np
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
+
+from models import MODEL
+
+MODEL_NAMES = ["cube", "tetrahedron", "octahedron"]
 
 
-class MyFrame(wx.Frame):
-
+class MainFrame(wx.Frame):
     def __init__(self):
-        super().__init__(
-            None,
-            title="3D Graph",
-            size=(900, 600)
-        )
+        super().__init__(None, title="3D Model Viewer", size=(900, 650))
+
+        self.model = None
+        self.base_vertices = None   # untouched copy, since MODEL.rotate() mutates in place
+        self.edge_pairs = []
+        self.limit = 1.0
 
         panel = wx.Panel(self)
+        main = wx.BoxSizer(wx.HORIZONTAL)
 
-        # -------------------------
-        # X AXIS
-        # -------------------------
+        # ---- plot ----
+        self.figure = Figure()
+        self.axes = self.figure.add_subplot(111)
+        self.canvas = FigureCanvas(panel, -1, self.figure)
+        main.Add(self.canvas, 1, wx.EXPAND | wx.ALL, 5)
 
-        x_label = wx.StaticText(panel, label="X")
+        # ---- controls ----
+        controls = wx.BoxSizer(wx.VERTICAL)
 
-        self.x_slider = wx.Slider(
-            panel,
-            value=0,
-            minValue=-100,
-            maxValue=100,
-            style=wx.SL_HORIZONTAL
-        )
+        controls.Add(wx.StaticText(panel, label="Model"), 0, wx.ALL, 5)
+        for name in MODEL_NAMES:
+            btn = wx.Button(panel, label=name.capitalize())
+            btn.Bind(wx.EVT_BUTTON, lambda evt, n=name: self.on_select(n))
+            controls.Add(btn, 0, wx.EXPAND | wx.ALL, 3)
 
-        self.x_value = wx.StaticText(panel, label="0")
+        controls.AddSpacer(15)
+        controls.Add(wx.StaticText(panel, label="Rotation (degrees)"), 0, wx.ALL, 5)
 
-        # -------------------------
-        # Y AXIS
-        # -------------------------
+        self.sliders = {}
+        for axis in ("X", "Y", "Z"):
+            controls.Add(wx.StaticText(panel, label=f"{axis} axis"), 0, wx.LEFT, 5)
+            s = wx.Slider(panel, value=0, minValue=-180, maxValue=180,
+                          style=wx.SL_HORIZONTAL | wx.SL_LABELS)
+            s.Bind(wx.EVT_SLIDER, lambda evt: self.redraw())
+            controls.Add(s, 0, wx.EXPAND | wx.ALL, 3)
+            self.sliders[axis] = s
 
-        y_label = wx.StaticText(panel, label="Y")
+        reset = wx.Button(panel, label="Reset rotation")
+        reset.Bind(wx.EVT_BUTTON, self.on_reset)
+        controls.Add(reset, 0, wx.EXPAND | wx.ALL, 8)
 
-        self.y_slider = wx.Slider(
-            panel,
-            value=0,
-            minValue=-100,
-            maxValue=100,
-            style=wx.SL_HORIZONTAL
-        )
+        main.Add(controls, 0, wx.EXPAND | wx.ALL, 5)
+        panel.SetSizer(main)
 
-        self.y_value = wx.StaticText(panel, label="0")
+        self.on_select(MODEL_NAMES[0])
 
-        # -------------------------
-        # Z AXIS
-        # -------------------------
+    def on_select(self, name):
+        self.model = MODEL(name)
+        self.base_vertices = self.model.vertices.astype(float).copy()
+        # edges is an NxN adjacency matrix; take the upper triangle for unique (i, j) pairs
+        self.edge_pairs = np.argwhere(np.triu(self.model.edges))
+        # fixed axis limits so the view doesn't rescale while rotating
+        self.limit = np.max(np.linalg.norm(self.base_vertices, axis=1)) * 1.2
+        self.redraw()
 
-        z_label = wx.StaticText(panel, label="Z")
+    def on_reset(self, event):
+        for s in self.sliders.values():
+            s.SetValue(0)
+        self.redraw()
 
-        self.z_slider = wx.Slider(
-            panel,
-            value=0,
-            minValue=-100,
-            maxValue=100,
-            style=wx.SL_HORIZONTAL
-        )
+    def redraw(self):
+        if self.model is None:
+            return
 
-        self.z_value = wx.StaticText(panel, label="0")
+        # MODEL.rotate() accumulates, so restore the original vertices first
+        self.model.vertices = self.base_vertices.copy()
+        self.model.rotate(self.sliders["X"].GetValue(),
+                          self.sliders["Y"].GetValue(),
+                          self.sliders["Z"].GetValue())
 
-        # Connect sliders to functions
-        self.x_slider.Bind(wx.EVT_SLIDER, self.change_x)
-        self.y_slider.Bind(wx.EVT_SLIDER, self.change_y)
-        self.z_slider.Bind(wx.EVT_SLIDER, self.change_z)
+        cols, projected = self.model.project2axis("z")   # flatten onto the xy plane
+        pts = projected[:, cols]                          # (N, 2): x and y
 
-        # -------------------------
-        # LAYOUT
-        # -------------------------
+        self.axes.clear()
+        for i, j in self.edge_pairs:
+            self.axes.plot([pts[i, 0], pts[j, 0]],
+                           [pts[i, 1], pts[j, 1]], "b-")
+        self.axes.plot(pts[:, 0], pts[:, 1], "ro", markersize=4)
 
-        main_sizer = wx.BoxSizer(wx.HORIZONTAL)
-
-        # Graph area
-        graph_area = wx.Panel(panel)
-        graph_area.SetBackgroundColour("white")
-
-        # Right side containing sliders
-        slider_sizer = wx.BoxSizer(wx.VERTICAL)
-
-        slider_sizer.Add(
-            x_label,
-            0,
-            wx.TOP | wx.ALIGN_CENTER,
-            20
-        )
-
-        slider_sizer.Add(
-            self.x_slider,
-            0,
-            wx.ALL,
-            10
-        )
-
-        slider_sizer.Add(
-            self.x_value,
-            0,
-            wx.ALIGN_CENTER
-        )
-
-        slider_sizer.Add(
-            y_label,
-            0,
-            wx.TOP | wx.ALIGN_CENTER,
-            20
-        )
-
-        slider_sizer.Add(
-            self.y_slider,
-            0,
-            wx.ALL,
-            10
-        )
-
-        slider_sizer.Add(
-            self.y_value,
-            0,
-            wx.ALIGN_CENTER
-        )
-
-        slider_sizer.Add(
-            z_label,
-            0,
-            wx.TOP | wx.ALIGN_CENTER,
-            20
-        )
-
-        slider_sizer.Add(
-            self.z_slider,
-            0,
-            wx.ALL,
-            10
-        )
-
-        slider_sizer.Add(
-            self.z_value,
-            0,
-            wx.ALIGN_CENTER
-        )
-
-        main_sizer.Add(
-            graph_area,
-            1,
-            wx.EXPAND | wx.ALL,
-            20
-        )
-
-        main_sizer.Add(
-            slider_sizer,
-            0,
-            wx.EXPAND | wx.TOP | wx.RIGHT,
-            20
-        )
-
-        panel.SetSizer(main_sizer)
-
-    # -------------------------
-    # SLIDER FUNCTIONS
-    # -------------------------
-
-    def change_x(self, event):
-        value = self.x_slider.GetValue()
-        self.x_value.SetLabel(str(value))
-
-    def change_y(self, event):
-        value = self.y_slider.GetValue()
-        self.y_value.SetLabel(str(value))
-
-    def change_z(self, event):
-        value = self.z_slider.GetValue()
-        self.z_value.SetLabel(str(value))
+        self.axes.set_xlim(-self.limit, self.limit)
+        self.axes.set_ylim(-self.limit, self.limit)
+        self.axes.set_aspect("equal")
+        self.axes.set_xlabel("x")
+        self.axes.set_ylabel("y")
+        self.canvas.draw_idle()
 
 
-app = wx.App()
-
-frame = MyFrame()
-
-frame.Show()
-
-app.MainLoop()
+if __name__ == "__main__":
+    app = wx.App()
+    MainFrame().Show()
+    app.MainLoop()
